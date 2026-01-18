@@ -90,7 +90,7 @@ def parse_flexible_date(date_str):
     except ValueError:
         raise ValueError(f"Invalid date format: '{date_str}'. Use YYYY-MM-DD, 'today', 'yesterday', or 'last Monday'")
 
-@mcp.tool("Meeting Finder")
+@mcp.tool("aubrey_meeting_finder")
 def meeting_finder(
     calendar_id: str = 'primary',
     start_date: str = '',
@@ -153,7 +153,7 @@ def meeting_finder(
         traceback.print_exc()
         return {"error": str(e)}
 
-@mcp.tool("Next Meeting")
+@mcp.tool("aubrey_next_meeting")
 def next_meeting(calendar_id: str = 'primary'):
     """
     Shows your next upcoming meeting on Google Calendar.
@@ -201,7 +201,7 @@ def next_meeting(calendar_id: str = 'primary'):
         traceback.print_exc()
         return {"error": str(e)}
 
-@mcp.tool("Meeting Rescheduler")
+@mcp.tool("aubrey_meeting_rescheduler")
 def meeting_rescheduler(
     meeting_title: str = '',
     event_id: str = '',
@@ -325,7 +325,46 @@ def meeting_rescheduler(
         new_datetime = new_datetime.replace(tzinfo=timezone.utc)
         new_end = new_datetime + timedelta(minutes=duration_minutes)
 
-        # Update event
+        # Check for conflicts at the requested time
+        conflict_warning = None
+        conflicting_events = []
+
+        # Query FreeBusy to check for conflicts
+        body = {
+            "timeMin": new_datetime.isoformat().replace('+00:00', 'Z'),
+            "timeMax": new_end.isoformat().replace('+00:00', 'Z'),
+            "items": [{"id": calendar_id}]
+        }
+
+        freebusy_result = calendar_service.freebusy().query(body=body).execute()
+        busy_times = freebusy_result['calendars'][calendar_id]['busy']
+
+        # Find conflicting events if any
+        if busy_times:
+            print(f"⚠️ Conflict detected at {new_date} {new_time}")
+
+            # Get details of conflicting events
+            events_at_time = calendar_service.events().list(
+                calendarId=calendar_id,
+                timeMin=new_datetime.isoformat().replace('+00:00', 'Z'),
+                timeMax=new_end.isoformat().replace('+00:00', 'Z'),
+                singleEvents=True
+            ).execute()
+
+            for conflicting_event in events_at_time.get('items', []):
+                # Skip the event being rescheduled
+                if conflicting_event.get('id') != event_id:
+                    conflicting_events.append({
+                        "title": conflicting_event.get('summary', 'No title'),
+                        "start": conflicting_event['start'].get('dateTime', conflicting_event['start'].get('date')),
+                        "end": conflicting_event['end'].get('dateTime', conflicting_event['end'].get('date'))
+                    })
+
+            if conflicting_events:
+                conflict_warning = f"⚠️ Double-booked: This time conflicts with {len(conflicting_events)} existing meeting(s)"
+                print(conflict_warning)
+
+        # Update event (proceed even if conflicts exist)
         event['start'] = {
             'dateTime': new_datetime.isoformat().replace('+00:00', 'Z'),
             'timeZone': 'UTC'
@@ -343,7 +382,7 @@ def meeting_rescheduler(
 
         print(f"Meeting rescheduled successfully!")
 
-        return {
+        result = {
             "event_id": updated_event['id'],
             "title": updated_event.get('summary'),
             "new_start_time": updated_event['start'].get('dateTime'),
@@ -352,13 +391,22 @@ def meeting_rescheduler(
             "calendar_link": updated_event.get('htmlLink')
         }
 
+        # Add conflict information if any
+        if conflict_warning:
+            result["warning"] = conflict_warning
+            result["conflicting_events"] = conflicting_events
+            result["forced"] = True
+            result["message"] = f"Meeting rescheduled successfully, but you're now double-booked with {len(conflicting_events)} other meeting(s)"
+
+        return result
+
     except Exception as e:
         print(f"ERROR in meeting_rescheduler: {e}")
         import traceback
         traceback.print_exc()
         return {"error": str(e)}
 
-@mcp.tool("Drive Meeting Summarizer")
+@mcp.tool("aubrey_drive_meeting_summarizer")
 def drive_meeting_summarizer(date: str = '', time: str = '', meeting_title: str = ''):
     """
     🤖 COMPREHENSIVE MEETING ANALYSIS - Your AI meeting assistant!
@@ -703,7 +751,7 @@ def drive_meeting_summarizer(date: str = '', time: str = '', meeting_title: str 
         traceback.print_exc()
         return {"error": str(e)}
 
-@mcp.tool("Meeting Prep Assistant")
+@mcp.tool("aubrey_meeting_prep_assistant")
 def meeting_prep_assistant(
     meeting_title: str = '',
     attendee_email: str = '',
@@ -823,7 +871,7 @@ def meeting_prep_assistant(
         traceback.print_exc()
         return {"error": str(e)}
 
-@mcp.tool("Calendar Conflicts Detector")
+@mcp.tool("aubrey_calendar_conflicts_detector")
 def calendar_conflicts_detector(days_ahead: int = 7, calendar_id: str = 'primary'):
     """
     Detects scheduling conflicts and back-to-back meetings in your calendar.
