@@ -510,10 +510,13 @@ def drive_meeting_summarizer(date: str = '', time: str = '', meeting_title: str 
 
         if not files:
             return {
-                "message": f"No meeting recordings found for {date}",
-                "suggestion": "Make sure recordings are saved to Google Drive's 'Meet Recordings' folder. Try a different date or check if the meeting was recorded.",
+                "status": "not_recorded",
+                "message": f"❌ This meeting was not recorded on {date}",
+                "reason": "No recording file found in Google Drive",
+                "suggestion": "The meeting either wasn't recorded, or the recording isn't saved to the 'Meet Recordings' folder in Google Drive. Check your Google Meet recording settings.",
                 "searched_date": date,
-                "searched_title": meeting_title if meeting_title else "any"
+                "searched_title": meeting_title if meeting_title else "any",
+                "searched_folder": "Meet Recordings"
             }
 
         print(f"Found {len(files)} recordings")
