@@ -1,6 +1,7 @@
 from north_mcp_python_sdk import NorthMCPServer
 import pickle
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -217,16 +218,16 @@ def meeting_rescheduler(
         meeting_title: Title of the meeting to reschedule (optional if event_id provided)
         event_id: Event ID of the meeting (optional if meeting_title provided)
         new_date: New date in YYYY-MM-DD format (leave empty to auto-find next available)
-        new_time: New time in HH:MM format (leave empty to auto-find next available)
+        new_time: New time in HH:MM format in YOUR local timezone (leave empty to auto-find next available)
         duration_minutes: Meeting duration in minutes (default: 60)
         calendar_id: Calendar ID (default: 'primary')
 
     Returns:
-        Updated meeting details with new time
+        Updated meeting details with new time. If conflicts exist, includes warning and conflicting events.
 
     Example:
         meeting_title = "Team Standup", new_date = "2026-01-20", new_time = "10:00"
-        Returns: Rescheduled meeting info
+        Returns: Rescheduled meeting info (10:00 AM in your timezone)
     """
     try:
         print(f"Rescheduling meeting: {meeting_title or event_id}")
@@ -262,6 +263,11 @@ def meeting_rescheduler(
             print(f"Found event: {event.get('summary')}")
         else:
             return {"error": "Must provide either meeting_title or event_id"}
+
+        # Get calendar timezone
+        calendar_info = calendar_service.calendars().get(calendarId=calendar_id).execute()
+        calendar_timezone = calendar_info.get('timeZone', 'UTC')
+        print(f"Calendar timezone: {calendar_timezone}")
 
         # If new date/time not specified, find next available slot
         if not new_date or not new_time:
@@ -320,10 +326,15 @@ def meeting_rescheduler(
             if not found_slot:
                 return {"error": "No available time slots found in the next 7 days"}
 
-        # Parse new date/time
+        # Parse new date/time in calendar's timezone
         new_datetime = datetime.strptime(f"{new_date} {new_time}", "%Y-%m-%d %H:%M")
-        new_datetime = new_datetime.replace(tzinfo=timezone.utc)
-        new_end = new_datetime + timedelta(minutes=duration_minutes)
+        new_datetime = new_datetime.replace(tzinfo=ZoneInfo(calendar_timezone))
+        print(f"Parsed time in {calendar_timezone}: {new_datetime}")
+
+        # Convert to UTC for API
+        new_datetime_utc = new_datetime.astimezone(timezone.utc)
+        new_end_utc = new_datetime_utc + timedelta(minutes=duration_minutes)
+        print(f"Converted to UTC: {new_datetime_utc}")
 
         # Check for conflicts at the requested time
         conflict_warning = None
@@ -331,8 +342,8 @@ def meeting_rescheduler(
 
         # Query FreeBusy to check for conflicts
         body = {
-            "timeMin": new_datetime.isoformat().replace('+00:00', 'Z'),
-            "timeMax": new_end.isoformat().replace('+00:00', 'Z'),
+            "timeMin": new_datetime_utc.isoformat().replace('+00:00', 'Z'),
+            "timeMax": new_end_utc.isoformat().replace('+00:00', 'Z'),
             "items": [{"id": calendar_id}]
         }
 
@@ -341,13 +352,13 @@ def meeting_rescheduler(
 
         # Find conflicting events if any
         if busy_times:
-            print(f"⚠️ Conflict detected at {new_date} {new_time}")
+            print(f"⚠️ Conflict detected at {new_date} {new_time} {calendar_timezone}")
 
             # Get details of conflicting events
             events_at_time = calendar_service.events().list(
                 calendarId=calendar_id,
-                timeMin=new_datetime.isoformat().replace('+00:00', 'Z'),
-                timeMax=new_end.isoformat().replace('+00:00', 'Z'),
+                timeMin=new_datetime_utc.isoformat().replace('+00:00', 'Z'),
+                timeMax=new_end_utc.isoformat().replace('+00:00', 'Z'),
                 singleEvents=True
             ).execute()
 
@@ -366,12 +377,12 @@ def meeting_rescheduler(
 
         # Update event (proceed even if conflicts exist)
         event['start'] = {
-            'dateTime': new_datetime.isoformat().replace('+00:00', 'Z'),
-            'timeZone': 'UTC'
+            'dateTime': new_datetime_utc.isoformat().replace('+00:00', 'Z'),
+            'timeZone': calendar_timezone
         }
         event['end'] = {
-            'dateTime': new_end.isoformat().replace('+00:00', 'Z'),
-            'timeZone': 'UTC'
+            'dateTime': new_end_utc.isoformat().replace('+00:00', 'Z'),
+            'timeZone': calendar_timezone
         }
 
         updated_event = calendar_service.events().update(
