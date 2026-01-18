@@ -1,4 +1,3 @@
-
 from typing import List
 from pydantic import BaseModel, Field
 from north_mcp_python_sdk import NorthMCPServer
@@ -12,111 +11,78 @@ mcp = NorthMCPServer(
     "Simple Calculator", host="0.0.0.0", port=_default_port
 )
 
-@mcp.tool()
-def aubrey_marcelotanner_add(a: int, b: int) -> int:
-    """Add two numbers"""
-    return a + b
+import pickle
+from datetime import datetime, timezone
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
 
+# ---------------------------
+# Google Calendar Authentication
+# ---------------------------
 
-@mcp.tool()
-def aubrey_marcelotanner_subtract(a: int, b: int) -> int:
-    """Subtract two numbers"""
-    return a - b
+SCOPES = ['https://www.googleapis.com/auth/calendar.readonly']
 
+# ---- FILL IN THE PATH TO YOUR DOWNLOADED CREDENTIALS ----
+CREDENTIALS_FILE = 'credentials.json'  # <-- replace if different
 
-@mcp.tool()
-def aubrey_marcelotanner_multiply(a: int, b: int) -> int:
-    """Multiply two numbers"""
-    return a * b
+# Try to load saved token
+try:
+    with open('token.pkl', 'rb') as token_file:
+        creds = pickle.load(token_file)
+except FileNotFoundError:
+    creds = None
 
-
-# destructiveHint due to possible division by zero etc. issues
-# The destructiveHint doesn’t prevent division by zero,
-# but it allows the system to warn or double-check with the user before running potentially dangerous operations. 
-# In this case, it’s about safety and user awareness, not automatic error handling.
-@mcp.tool(annotations={"destructiveHint":  True})
-def aubrey_marcelotanner_divide(a: int, b: int) -> int:
-    """Divide two numbers"""
-    return int(a / b)
-
-
-@mcp.tool()
-def aubrey_marcelotanner_exponent(a: int, b: int) -> int:
-    """
-    Raises the first number to the power of the second number.
-    Exponent two numbers"""
-    return a**b
-
-
-@mcp.tool()
-def aubrey_marcelotanner_modulo(a: int, b: int) -> int:
-    """Modulo two numbers"""
-    return a % b
-
-
-class CalculationRequest(BaseModel):
-    """Pydantic model for batch calculations"""
-    operation: str = Field(description="Operation to perform: 'add', 'subtract', 'multiply', 'divide', 'average'")
-    numbers: List[float] = Field(description="List of numbers to operate on")
-    precision: int = Field(default=2, description="Decimal precision for the result")
-
-
-
-@mcp.tool()
-def aubrey_marcelotanner_batch_calculate(request: CalculationRequest) -> dict:
-    """Perform batch calculations using a Pydantic model
-    ie add multiple numbers
-    batch_calculate(CalculationRequest(
-        operation="add",
-        numbers=[5, 3, 7, 2],
-        precision=2
-    ))
-    """
-    numbers = request.numbers
-    operation = request.operation.lower()
-    precision = request.precision
-    
-    if len(numbers) == 0:
-        return {"error": "No numbers provided"}
-    
-    result = 0.0
-    
-    if operation == "add":
-        result = sum(numbers)
-    
-    elif operation == "subtract":
-        result = numbers[0] if numbers else 0
-        for num in numbers[1:]:
-            result -= num
-    
-    elif operation == "multiply":
-        result = 1
-        for num in numbers:
-            result *= num
-    
-    elif operation == "divide":
-        if 0 in numbers[1:]:
-            return {"error": "Cannot divide by zero"}
-        result = numbers[0] if numbers else 0
-        for num in numbers[1:]:
-            result /= num
-    
-    elif operation == "average":
-        result = sum(numbers) / len(numbers)
-    
+# Check if credentials are invalid or expired
+if not creds or not creds.valid:
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
     else:
-        return {"error": f"Unknown operation: {operation}"}
-    
-    return {
-        "operation": operation,
-        "input_numbers": numbers,
-        "result": round(result, precision),
-        "precision": precision
-    }
+        flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
+    # Save the refreshed/new token
+    with open('token.pkl', 'wb') as token_file:
+        pickle.dump(creds, token_file)
 
+# Build the Calendar service
+calendar_service = build('calendar', 'v3', credentials=creds)
 
-# Use streamable-http transport to enable streaming responses over HTTP.
-# This allows the server to send data to the client incrementally (in chunks),
-# improving responsiveness for long-running or large operations.
+@mcp.tool("Meeting Finder")
+def meeting_finder(
+    calendar_id: str = 'primary',  # <-- replace if you want another calendar
+    start_date: str = None,        # <-- YYYY-MM-DDTHH:MM:SSZ format or None for now
+    end_date: str = None           # <-- YYYY-MM-DDTHH:MM:SSZ format or None for now
+):
+    """
+    Finds Google Meet events in a calendar within a date range.
+    Example North input: "North, show me all Google Meet meetings I attended last week that have recordings."
+    """
+    if not start_date:
+        start_date = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+    if not end_date:
+        end_date = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+
+    events_result = calendar_service.events().list(
+        calendarId=calendar_id,
+        timeMin=start_date,
+        timeMax=end_date,
+        singleEvents=True,
+        orderBy='startTime',
+        conferenceDataVersion=1
+    ).execute()
+    events = events_result.get('items', [])
+
+    meet_events = []
+    for e in events:
+        if 'hangoutLink' in e:  # Google Meet link exists
+            meet_events.append({
+                "event_id": e.get('id'),
+                "title": e.get('summary'),
+                "date": e['start'].get('dateTime', e['start'].get('date')),
+                "meet_link": e.get('hangoutLink'),
+                "recording": True  # placeholder; replace later with Drive check
+            })
+    return meet_events
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")

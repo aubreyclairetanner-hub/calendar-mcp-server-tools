@@ -1,2 +1,5 @@
 client_secret.json
 .env*
+credentials.json
+token.pkl
+funsies/
